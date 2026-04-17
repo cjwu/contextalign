@@ -1,0 +1,28 @@
+# Build output
+dist/
+*.tsbuildinfo
+
+# Dependencies
+node_modules/
+
+# Runtime state (don't commit user-specific state)
+*.db
+*.db-shm
+*.db-wal
+*.log
+*.sock
+.alive
+.loading
+.spawnlock
+
+# OS noise
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+
+# Internal spec (not for public repo)
+problem_definition.md

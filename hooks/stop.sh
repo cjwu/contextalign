@@ -1,0 +1,21 @@
+#!/bin/bash
+# ContextAlign: Stop hook
+# Triggers async indexing of new assistant response
+SOCK="$HOME/.claude/contextalign/ctx.sock"
+INPUT=$(cat)
+
+SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // ""')
+TRANSCRIPT=$(echo "$INPUT" | jq -r '.transcript_path // ""')
+
+if [ -z "$SESSION_ID" ] || [ -z "$TRANSCRIPT" ]; then
+  exit 0
+fi
+
+curl -s --max-time 3 \
+  --unix-socket "$SOCK" \
+  -X POST http://localhost/stop \
+  -H "Content-Type: application/json" \
+  -d "{\"type\":\"stop\",\"sessionId\":\"$SESSION_ID\",\"transcriptPath\":\"$TRANSCRIPT\"}" \
+  >/dev/null 2>&1
+
+exit 0
