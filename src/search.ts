@@ -18,6 +18,8 @@ const CONTEXT_HEADER =
 const FAR_FUTURE = "9999-12-31T23:59:59Z";
 const MIN_VEC_CHUNK_CHARS = 100; // exclude short Q-like chunks from vector search to reduce noise
 const TEMPORAL_BOOST = 3.0;       // multiply score for chunks whose timestamp falls in query's parsed time range
+// mxbai-embed-large-v1 query-side instruction (doc side raw). Aligns query intent with document space.
+const QUERY_PREFIX = "Represent this sentence for searching relevant passages: ";
 
 export async function searchAndFormat(
   sessionId: string,
@@ -325,7 +327,7 @@ async function vectorSearch(
   beforeTimestamp: string,
   limit: number
 ): Promise<SearchResult[]> {
-  const queryEmbedding = await embed(query);
+  const queryEmbedding = await embed(QUERY_PREFIX + query);
   if (!queryEmbedding) return [];
 
   const queryVec = bufferToFloat32Array(queryEmbedding);
