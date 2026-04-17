@@ -1,4 +1,6 @@
 import { createHash } from "crypto";
+import { appendFileSync, mkdirSync } from "fs";
+import { dirname } from "path";
 import * as chrono from "chrono-node";
 import {
   searchFTS,
@@ -23,10 +25,16 @@ export async function searchAndFormat(
   config: Config
 ): Promise<string> {
   const compactTs = getCompactTimestamp(sessionId);
-  if (!compactTs) return "";
+  if (!compactTs) {
+    logInject({ sessionId, query, status: "no_compact" });
+    return "";
+  }
 
   const trimmed = query.trim();
-  if (isStopWord(trimmed, config.stopWords)) return "";
+  if (isStopWord(trimmed, config.stopWords)) {
+    logInject({ sessionId, query: trimmed, status: "stopword" });
+    return "";
+  }
 
   const ftsQuery = escapeFtsQuery(trimmed);
 
@@ -65,7 +73,10 @@ export async function searchAndFormat(
     otherResults = toRrfScored(otherFts);
   }
 
-  if (currentResults.length === 0 && otherResults.length === 0) return "";
+  if (currentResults.length === 0 && otherResults.length === 0) {
+    logInject({ sessionId, query: trimmed, status: "no_results" });
+    return "";
+  }
 
   currentResults = applyTimeDecay(currentResults, compactTs);
   otherResults = applyTimeDecay(otherResults, compactTs);
@@ -77,7 +88,63 @@ export async function searchAndFormat(
   }
 
   const chronological = timeRanges.length > 0 || hasUpdateIndicator(trimmed);
-  return formatContext(currentResults, otherResults, config.maxContextChars, chronological);
+  const output = formatContext(currentResults, otherResults, config.maxContextChars, chronological);
+  logInject({
+    sessionId,
+    query: trimmed,
+    status: "ok",
+    chronological,
+    currentResults,
+    otherResults,
+    chars: output.length,
+  });
+  return output;
+}
+
+// --- Debug-mode inject log ---
+
+const DEBUG_LOG_PATH = `${process.env.HOME}/.claude/contextalign/inject.log`;
+
+interface LogEntry {
+  sessionId: string;
+  query: string;
+  status: "ok" | "no_compact" | "stopword" | "no_results";
+  chronological?: boolean;
+  currentResults?: SearchResult[];
+  otherResults?: SearchResult[];
+  chars?: number;
+}
+
+function logInject(entry: LogEntry): void {
+  if (process.env.CAN_DEBUG !== "1") return;
+  try {
+    const scores: number[] = [];
+    const previews: string[] = [];
+    if (entry.currentResults || entry.otherResults) {
+      const merged = [...(entry.currentResults ?? []), ...(entry.otherResults ?? [])];
+      for (const r of merged.slice(0, 5)) {
+        scores.push(Number(r.score.toFixed(4)));
+      }
+      for (const r of merged.slice(0, 3)) {
+        const text = r.message_text.length <= 500 ? r.message_text : r.chunk_text;
+        previews.push(text.slice(0, 80).replace(/\s+/g, " "));
+      }
+    }
+    const line = JSON.stringify({
+      t: new Date().toISOString(),
+      sid: entry.sessionId.slice(0, 8),
+      q: entry.query.slice(0, 120),
+      status: entry.status,
+      chrono: entry.chronological ?? false,
+      n_cur: entry.currentResults?.length ?? 0,
+      n_oth: entry.otherResults?.length ?? 0,
+      chars: entry.chars ?? 0,
+      scores,
+      preview: previews,
+    });
+    mkdirSync(dirname(DEBUG_LOG_PATH), { recursive: true });
+    appendFileSync(DEBUG_LOG_PATH, line + "\n");
+  } catch {}
 }
 
 function hasUpdateIndicator(query: string): boolean {

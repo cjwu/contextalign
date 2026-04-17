@@ -75,7 +75,7 @@ if [ ! -x "$NODE" ] || [ ! -f "$SERVER" ]; then
   exit 0
 fi
 
-export NODE SERVER LOG
+export NODE SERVER LOG CAN_DEBUG
 /usr/bin/lockf -t 0 "$LOCK" /bin/bash -c '
   if ! pgrep -f "ContextAlign/dist/index.js" > /dev/null 2>&1; then
     nohup "$NODE" "$SERVER" >> "$LOG" 2>&1 </dev/null &
