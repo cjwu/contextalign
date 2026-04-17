@@ -88,7 +88,12 @@ export async function searchAndFormat(
   }
 
   const chronological = timeRanges.length > 0 || hasUpdateIndicator(trimmed);
-  const output = formatContext(currentResults, otherResults, config.maxContextChars, chronological);
+  const { output, truncated, rendered, total } = formatContext(
+    currentResults,
+    otherResults,
+    config.maxContextChars,
+    chronological
+  );
   logInject({
     sessionId,
     query: trimmed,
@@ -97,6 +102,9 @@ export async function searchAndFormat(
     currentResults,
     otherResults,
     chars: output.length,
+    truncated,
+    rendered,
+    total,
   });
   return output;
 }
@@ -113,6 +121,9 @@ interface LogEntry {
   currentResults?: SearchResult[];
   otherResults?: SearchResult[];
   chars?: number;
+  truncated?: boolean;
+  rendered?: number;
+  total?: number;
 }
 
 function logInject(entry: LogEntry): void {
@@ -139,6 +150,9 @@ function logInject(entry: LogEntry): void {
       n_cur: entry.currentResults?.length ?? 0,
       n_oth: entry.otherResults?.length ?? 0,
       chars: entry.chars ?? 0,
+      truncated: entry.truncated ?? false,
+      rendered: entry.rendered ?? 0,
+      total: entry.total ?? 0,
       scores,
       preview: previews,
     });
@@ -435,7 +449,7 @@ function formatContext(
   otherResults: SearchResult[],
   maxChars: number,
   chronological: boolean = false
-): string {
+): { output: string; truncated: boolean; rendered: number; total: number } {
   // Dedup pass: sort by timestamp ASC and take first-wins.
   // Rationale: the earliest occurrence is guaranteed to be compacted away; the latest
   // may still be in the live context window — so CAN keeps the version Claude can't see.
@@ -452,24 +466,27 @@ function formatContext(
     kept.add(r);
   }
 
-  // Render pass: chronological ASC if temporal/update query; otherwise original relevance order
   const renderOrder = chronological
     ? byTimeAsc.filter((r) => kept.has(r))
     : [...currentResults, ...otherResults].filter((r) => kept.has(r));
 
   let output = CONTEXT_HEADER + "\n";
   let remaining = maxChars - output.length;
+  let rendered = 0;
+  let truncated = false;
   for (const r of renderOrder) {
     const line = formatResultLine(r);
     if (line.length > remaining) {
       if (remaining > 50) {
         output += line.slice(0, remaining - 4) + "...\n";
       }
+      truncated = true;
       break;
     }
     output += line;
     remaining -= line.length;
+    rendered++;
   }
 
-  return output.trim();
+  return { output: output.trim(), truncated, rendered, total: renderOrder.length };
 }
