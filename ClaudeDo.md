@@ -109,20 +109,15 @@ Merge only the `contextalign` entry — do NOT overwrite other servers.
 ```
 Merge only the `hooks` block — do NOT overwrite existing hooks.
 
-### 7. Statusline third row (optional, recommended)
+### 7. Statusline (optional, recommended)
 
-Append to `~/.claude/statusline-command.sh`:
+Copy the bundled template to `~/.claude/` (overwrites any existing one — back up first if needed):
 ```bash
-# Line 3: ContextAlign status
-if [ -f "$HOME/.claude/contextalign/.alive" ]; then
-  line3="[can:UP]"; line3_color="\033[0;32m"
-elif [ -f "$HOME/.claude/contextalign/.loading" ]; then
-  line3="[can:RUMBLINGR]"; line3_color="\033[0;33m"
-else
-  line3="[can:DOWN]"; line3_color="\033[0;31m"
-fi
-printf "\n${line3_color}%s\033[0m" "$line3"
+cp "$CAN_DIR/scripts/statusline-command.sh" "$HOME/.claude/statusline-command.sh"
+chmod +x "$HOME/.claude/statusline-command.sh"
 ```
+
+This script renders three lines: cwd, model/ctx/rate-limits, and a merged `[can:UP|DOWN|RUMBLINGR]` state + ctx>30% `compact ctx` warning.
 
 Ensure `statusLine.command` in `~/.claude/settings.json` points to this script.
 
@@ -273,20 +268,15 @@ Linux 上沒有 `lockf` 的話，把 `hooks/prompt.sh` 裡 `/usr/bin/lockf -t 0 
 ```
 只合併 `hooks` 區塊，不要覆蓋使用者其他 hooks。
 
-### 7. Statusline 第三行（可選但建議）
+### 7. Statusline（可選但建議）
 
-Append 到 `~/.claude/statusline-command.sh`：
+把 repo 裡的範本複製到 `~/.claude/`（會覆蓋舊檔，需要先備份就先備份）：
 ```bash
-# Line 3: ContextAlign status
-if [ -f "$HOME/.claude/contextalign/.alive" ]; then
-  line3="[can:UP]"; line3_color="\033[0;32m"
-elif [ -f "$HOME/.claude/contextalign/.loading" ]; then
-  line3="[can:RUMBLINGR]"; line3_color="\033[0;33m"
-else
-  line3="[can:DOWN]"; line3_color="\033[0;31m"
-fi
-printf "\n${line3_color}%s\033[0m" "$line3"
+cp "$CAN_DIR/scripts/statusline-command.sh" "$HOME/.claude/statusline-command.sh"
+chmod +x "$HOME/.claude/statusline-command.sh"
 ```
+
+這腳本會輸出三行：cwd、model/ctx/rate-limits、合併的 `[can:UP|DOWN|RUMBLINGR]` 狀態 + ctx>30% 時的 `compact ctx` 警告。
 
 確認 `~/.claude/settings.json` 裡的 `statusLine.command` 指向這個腳本。
 
