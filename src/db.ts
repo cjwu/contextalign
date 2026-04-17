@@ -238,6 +238,16 @@ export function listSessionIds(): string[] {
   return (db.prepare("SELECT session_id FROM meta").all() as any[]).map((r) => r.session_id);
 }
 
+export function getSessionStartTime(sessionId: string): string | null {
+  const ct = chunksTable(sessionId);
+  try {
+    const row = db.prepare(`SELECT MIN(timestamp) as ts FROM ${ct}`).get() as any;
+    return row?.ts ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export function deleteSession(sessionId: string): boolean {
   const ct = chunksTable(sessionId);
   const ft = ftsTable(sessionId);

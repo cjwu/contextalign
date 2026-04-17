@@ -11,9 +11,19 @@ LOCK="$BASE/.spawnlock"
 LOG="$BASE/server.log"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SERVER="${CAN_SERVER:-$SCRIPT_DIR/../dist/index.js}"
-NODE="${CAN_NODE:-$(command -v node 2>/dev/null)}"
-[ -z "$NODE" ] && NODE="/usr/local/opt/node@22/bin/node"
+DIST_DIR="$(cd "$SCRIPT_DIR/.." && pwd)/dist"
+SERVER="${CAN_SERVER:-$DIST_DIR/index.js}"
+
+# Prefer Node 22 via Homebrew (CAN needs >=18). Only fall back to $PATH if node@22 absent.
+if [ -n "$CAN_NODE" ]; then
+  NODE="$CAN_NODE"
+elif [ -x "/opt/homebrew/opt/node@22/bin/node" ]; then
+  NODE="/opt/homebrew/opt/node@22/bin/node"
+elif [ -x "/usr/local/opt/node@22/bin/node" ]; then
+  NODE="/usr/local/opt/node@22/bin/node"
+else
+  NODE="$(command -v node 2>/dev/null)"
+fi
 
 mkdir -p "$BASE"
 
