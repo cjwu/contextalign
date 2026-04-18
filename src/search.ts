@@ -421,6 +421,7 @@ async function vectorSearch(
       priority: item.priority,
       corrected_at: item.corrected_at ?? null,
       correction_reason: item.correction_reason ?? null,
+      user_cite_score: item.user_cite_score ?? 0,
     });
     if (results.length >= limit) break;
   }
@@ -470,6 +471,8 @@ function rrfMerge(a: SearchResult[], b: SearchResult[]): SearchResult[] {
   return Array.from(merged.values()).sort((x, y) => y.score - x.score);
 }
 
+const USER_CITE_ALPHA = 0.4;
+
 function applyTimeDecay(results: SearchResult[], compactTs: string): SearchResult[] {
   const compactTime = new Date(compactTs).getTime();
 
@@ -479,7 +482,8 @@ function applyTimeDecay(results: SearchResult[], compactTs: string): SearchResul
       const hoursAgo = (compactTime - msgTime) / (1000 * 60 * 60);
       const decay = Math.pow(0.5, hoursAgo / 24);
       const priorityBoost = r.priority ? 2.0 : 1.0;
-      return { ...r, score: r.score * decay * priorityBoost };
+      const userCiteBoost = 1 + USER_CITE_ALPHA * (r.user_cite_score ?? 0);
+      return { ...r, score: r.score * decay * priorityBoost * userCiteBoost };
     })
     .sort((a, b) => {
       if (b.priority !== a.priority) return b.priority - a.priority;

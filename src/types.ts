@@ -80,6 +80,7 @@ export interface SearchResult {
   priority: number;
   corrected_at?: string | null;
   correction_reason?: string | null;
+  user_cite_score?: number;
 }
 
 // Hook request types

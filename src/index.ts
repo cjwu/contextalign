@@ -9,7 +9,7 @@ import { initDb, setCompactTimestamp, listSessions, deleteSession, getCompactTim
 import { initEmbedding, embed, isEmbeddingReady } from "./embedding.js";
 import { indexNewMessages } from "./indexer.js";
 import { searchAndFormat } from "./search.js";
-import { insertPriorityChunk, ensureSessionTables, markLastAssistantCorrected } from "./db.js";
+import { insertPriorityChunk, ensureSessionTables, markLastAssistantCorrected, incrementLastAssistantUserCite } from "./db.js";
 import { DEFAULT_CONFIG } from "./types.js";
 import type { Config } from "./types.js";
 
@@ -75,6 +75,17 @@ async function handleHookRequest(data: any): Promise<any> {
           markLastAssistantCorrected(sessionId, prompt);
         } catch (err) {
           console.error("[ContextAlign] markLastAssistantCorrected error:", err);
+        }
+      }
+
+      // User-citation detection (v1.9.3): if the user references earlier content,
+      // treat it as evidence that chunk is in the user's cognitive model.
+      // Increment user_cite_score on the most recent assistant chunk.
+      if (prompt && sessionId && /剛才|剛剛|之前|上面|上次|先前|你提到|我們說|我們討論|我們決定|earlier you|above/i.test(prompt)) {
+        try {
+          incrementLastAssistantUserCite(sessionId);
+        } catch (err) {
+          console.error("[ContextAlign] incrementLastAssistantUserCite error:", err);
         }
       }
 

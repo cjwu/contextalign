@@ -60,6 +60,8 @@ export function ensureSessionTables(sessionId: string, transcriptPath: string): 
   // Idempotent column adds for correction annotation (v1.9.2+)
   try { db.exec(`ALTER TABLE ${ct} ADD COLUMN corrected_at TEXT`); } catch {}
   try { db.exec(`ALTER TABLE ${ct} ADD COLUMN correction_reason TEXT`); } catch {}
+  // User-citation behavioral signal (v1.9.3+). Positive-only, capped at 3.0.
+  try { db.exec(`ALTER TABLE ${ct} ADD COLUMN user_cite_score REAL DEFAULT 0`); } catch {}
 
   db.exec(`
     CREATE VIRTUAL TABLE IF NOT EXISTS ${ft} USING fts5(
@@ -124,6 +126,7 @@ export function searchFTS(
   const rows = db.prepare(`
     SELECT c.id, c.jsonl_offset, c.role, c.message_text, c.chunk_text,
            c.priority, c.timestamp, c.corrected_at, c.correction_reason,
+           c.user_cite_score,
            ${ft}.rank AS score
     FROM ${ft}
     JOIN ${ct} c ON c.id = ${ft}.rowid
@@ -149,6 +152,7 @@ export function searchFTS(
         priority: row.priority,
         corrected_at: row.corrected_at ?? null,
         correction_reason: row.correction_reason ?? null,
+        user_cite_score: row.user_cite_score ?? 0,
       });
     }
   }
@@ -166,11 +170,11 @@ export function getAllEmbeddings(
   sessionId: string,
   beforeTimestamp: string,
   minChars: number = 0
-): Array<{ id: number; jsonl_offset: number; role: string; message_text: string; chunk_text: string; embedding: Buffer; priority: number; timestamp: string; corrected_at: string | null; correction_reason: string | null }> {
+): Array<{ id: number; jsonl_offset: number; role: string; message_text: string; chunk_text: string; embedding: Buffer; priority: number; timestamp: string; corrected_at: string | null; correction_reason: string | null; user_cite_score: number }> {
   const ct = chunksTable(sessionId);
   return db.prepare(`
     SELECT id, jsonl_offset, role, message_text, chunk_text, embedding, priority, timestamp,
-           corrected_at, correction_reason
+           corrected_at, correction_reason, user_cite_score
     FROM ${ct}
     WHERE embedding IS NOT NULL
       AND timestamp < ?
@@ -196,6 +200,32 @@ export function markLastAssistantCorrected(sessionId: string, reason: string): n
     return Number(res.changes);
   } catch {
     return 0;
+  }
+}
+
+// Increment user_cite_score on the most recent assistant chunk (capped).
+// Returns the jsonl_offset that was credited, or null on no-op.
+export function incrementLastAssistantUserCite(
+  sessionId: string,
+  delta: number = 0.5,
+  cap: number = 3.0
+): number | null {
+  const ct = chunksTable(sessionId);
+  try {
+    const row = db.prepare(`
+      SELECT jsonl_offset, user_cite_score FROM ${ct}
+      WHERE role = 'assistant'
+      ORDER BY timestamp DESC LIMIT 1
+    `).get() as any;
+    if (!row) return null;
+    const newScore = Math.min((row.user_cite_score ?? 0) + delta, cap);
+    db.prepare(`
+      UPDATE ${ct} SET user_cite_score = ?
+      WHERE jsonl_offset = ?
+    `).run(newScore, row.jsonl_offset);
+    return row.jsonl_offset as number;
+  } catch {
+    return null;
   }
 }
 
