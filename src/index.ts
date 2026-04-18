@@ -9,7 +9,7 @@ import { initDb, setCompactTimestamp, listSessions, deleteSession, getCompactTim
 import { initEmbedding, embed, isEmbeddingReady } from "./embedding.js";
 import { indexNewMessages } from "./indexer.js";
 import { searchAndFormat, getLastInjection, wasChunkCited } from "./search.js";
-import { insertPriorityChunk, ensureSessionTables, markLastAssistantCorrected, incrementLastAssistantUserCite, updateLlmUseScore } from "./db.js";
+import { insertPriorityChunk, ensureSessionTables, markLastAssistantCorrected, incrementLastAssistantUserCite, updateLlmUseScore, setLastAssistantDwell } from "./db.js";
 import { readFileSync } from "fs";
 import { DEFAULT_CONFIG } from "./types.js";
 import type { Config } from "./types.js";
@@ -66,6 +66,22 @@ async function handleHookRequest(data: any): Promise<any> {
       // Ensure session exists
       if (transcriptPath) {
         ensureSessionTables(sessionId, transcriptPath);
+      }
+
+      // Yi 2014 dwell-time: gap between latest assistant turn and this prompt.
+      // Normalizes by response length downstream. Capped inside DB at 5 min to
+      // discount AFK gaps. Fires before correction/citation so those updates
+      // still hit the intended chunk.
+      if (sessionId && transcriptPath) {
+        try {
+          const lastTs = readLatestAssistantTimestamp(transcriptPath);
+          if (lastTs) {
+            const dwellMs = Date.now() - new Date(lastTs).getTime();
+            if (dwellMs > 0) setLastAssistantDwell(sessionId, dwellMs);
+          }
+        } catch (err) {
+          console.error("[ContextAlign] dwell measurement error:", err);
+        }
       }
 
       // Correction detection: if user prompt signals rejection of previous AI
@@ -149,6 +165,26 @@ async function handleHookRequest(data: any): Promise<any> {
 
     default:
       return { ok: true };
+  }
+}
+
+function readLatestAssistantTimestamp(transcriptPath: string): string | null {
+  try {
+    const content = readFileSync(transcriptPath, "utf-8");
+    const lines = content.split("\n");
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const line = lines[i].trim();
+      if (!line) continue;
+      try {
+        const entry = JSON.parse(line);
+        if (entry.type === "assistant" && entry.timestamp) return entry.timestamp;
+      } catch {
+        continue;
+      }
+    }
+    return null;
+  } catch {
+    return null;
   }
 }
 

@@ -250,6 +250,7 @@ async function vectorSearch(
       correction_reason: item.correction_reason ?? null,
       user_cite_score: item.user_cite_score ?? 0,
       llm_use_score: item.llm_use_score ?? 0,
+      dwell_ms: item.dwell_ms ?? null,
     });
     if (results.length >= limit) break;
   }

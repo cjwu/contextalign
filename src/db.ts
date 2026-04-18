@@ -64,6 +64,9 @@ export function ensureSessionTables(sessionId: string, transcriptPath: string): 
   try { db.exec(`ALTER TABLE ${ct} ADD COLUMN user_cite_score REAL DEFAULT 0`); } catch {}
   // LLM downstream usage signal (v1.9.4+, RMM-style). EMA clipped to [-1, 1].
   try { db.exec(`ALTER TABLE ${ct} ADD COLUMN llm_use_score REAL DEFAULT 0`); } catch {}
+  // Yi 2014 dwell-time signal (v1.9.7+): ms between this assistant chunk and
+  // user's next prompt. NULL = not measured. Ranking normalizes by response length.
+  try { db.exec(`ALTER TABLE ${ct} ADD COLUMN dwell_ms INTEGER DEFAULT NULL`); } catch {}
 
   db.exec(`
     CREATE VIRTUAL TABLE IF NOT EXISTS ${ft} USING fts5(
@@ -128,7 +131,7 @@ export function searchFTS(
   const rows = db.prepare(`
     SELECT c.id, c.jsonl_offset, c.role, c.message_text, c.chunk_text,
            c.priority, c.timestamp, c.corrected_at, c.correction_reason,
-           c.user_cite_score, c.llm_use_score,
+           c.user_cite_score, c.llm_use_score, c.dwell_ms,
            ${ft}.rank AS score
     FROM ${ft}
     JOIN ${ct} c ON c.id = ${ft}.rowid
@@ -156,6 +159,7 @@ export function searchFTS(
         correction_reason: row.correction_reason ?? null,
         user_cite_score: row.user_cite_score ?? 0,
         llm_use_score: row.llm_use_score ?? 0,
+        dwell_ms: row.dwell_ms ?? null,
       });
     }
   }
@@ -173,11 +177,11 @@ export function getAllEmbeddings(
   sessionId: string,
   beforeTimestamp: string,
   minChars: number = 0
-): Array<{ id: number; jsonl_offset: number; role: string; message_text: string; chunk_text: string; embedding: Buffer; priority: number; timestamp: string; corrected_at: string | null; correction_reason: string | null; user_cite_score: number; llm_use_score: number }> {
+): Array<{ id: number; jsonl_offset: number; role: string; message_text: string; chunk_text: string; embedding: Buffer; priority: number; timestamp: string; corrected_at: string | null; correction_reason: string | null; user_cite_score: number; llm_use_score: number; dwell_ms: number | null }> {
   const ct = chunksTable(sessionId);
   return db.prepare(`
     SELECT id, jsonl_offset, role, message_text, chunk_text, embedding, priority, timestamp,
-           corrected_at, correction_reason, user_cite_score, llm_use_score
+           corrected_at, correction_reason, user_cite_score, llm_use_score, dwell_ms
     FROM ${ct}
     WHERE embedding IS NOT NULL
       AND timestamp < ?
@@ -221,6 +225,26 @@ export function updateLlmUseScore(sessionId: string, jsonlOffset: number, cited:
     db.prepare(`
       UPDATE ${ct} SET llm_use_score = ? WHERE jsonl_offset = ?
     `).run(next, jsonlOffset);
+  } catch {}
+}
+
+// Yi dwell-time: record ms between the latest assistant chunk's timestamp and
+// the user's next prompt. Only fills when NULL to avoid clobbering with AFK gaps
+// on later prompts. Cap at 5 min — beyond that we can't distinguish engagement
+// from the user walking away.
+export function setLastAssistantDwell(sessionId: string, dwellMs: number): void {
+  const ct = chunksTable(sessionId);
+  const capped = Math.max(0, Math.min(dwellMs, 5 * 60 * 1000));
+  try {
+    db.prepare(`
+      UPDATE ${ct} SET dwell_ms = ?
+      WHERE role = 'assistant' AND dwell_ms IS NULL
+        AND jsonl_offset = (
+          SELECT jsonl_offset FROM ${ct}
+          WHERE role = 'assistant' AND dwell_ms IS NULL
+          ORDER BY timestamp DESC LIMIT 1
+        )
+    `).run(capped);
   } catch {}
 }
 
