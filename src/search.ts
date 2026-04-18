@@ -20,6 +20,12 @@ const MIN_VEC_CHUNK_CHARS = 100; // exclude short Q-like chunks from vector sear
 const TEMPORAL_BOOST = 3.0;       // multiply score for chunks whose timestamp falls in query's parsed time range
 // mxbai-embed-large-v1 query-side instruction (doc side raw). Aligns query intent with document space.
 const QUERY_PREFIX = "Represent this sentence for searching relevant passages: ";
+// Interrogative markers to strip so query embedding lands closer to declarative doc space
+const INTERROGATIVE_RE = /什麼|甚麼|哪一?個|哪些|怎樣|怎麼樣|怎麼|如何|為什麼|為何|嗎|呢|吧|\?|？/g;
+
+function stripInterrogatives(q: string): string {
+  return q.replace(INTERROGATIVE_RE, " ").replace(/\s+/g, " ").trim();
+}
 
 export async function searchAndFormat(
   sessionId: string,
@@ -331,13 +337,26 @@ async function vectorSearch(
   if (!queryEmbedding) return [];
 
   const queryVec = bufferToFloat32Array(queryEmbedding);
+
+  // Multi-query: also embed the stripped form if it's different and non-trivial.
+  // Addresses query-doc asymmetry: 「向量模型叫什麼名字」-> 「向量模型叫 名字」 lands closer to fact chunks.
+  const stripped = stripInterrogatives(query);
+  let strippedVec: Float32Array | null = null;
+  if (stripped.length >= 2 && stripped !== query) {
+    const se = await embed(QUERY_PREFIX + stripped);
+    if (se) strippedVec = bufferToFloat32Array(se);
+  }
+
   const allChunks = getAllEmbeddings(sessionId, beforeTimestamp, MIN_VEC_CHUNK_CHARS);
 
   if (allChunks.length === 0) return [];
 
   const scored = allChunks.map((chunk) => {
     const chunkVec = bufferToFloat32Array(chunk.embedding);
-    const sim = cosineSimilarity(queryVec, chunkVec);
+    const simOrig = cosineSimilarity(queryVec, chunkVec);
+    const sim = strippedVec
+      ? Math.max(simOrig, cosineSimilarity(strippedVec, chunkVec))
+      : simOrig;
     return { ...chunk, score: sim };
   });
 
