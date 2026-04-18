@@ -32,15 +32,20 @@ export async function searchAndFormat(
   query: string,
   config: Config
 ): Promise<string> {
+  const t0 = performance.now();
+  const timing: Timing = { fts: 0, vec: 0, temporal: 0, format: 0, total: 0 };
+
   const compactTs = getCompactTimestamp(sessionId);
   if (!compactTs) {
-    logInject({ sessionId, query, status: "no_compact" });
+    timing.total = performance.now() - t0;
+    logInject({ sessionId, query, status: "no_compact", timing });
     return "";
   }
 
   const trimmed = query.trim();
   if (isStopWord(trimmed, config.stopWords)) {
-    logInject({ sessionId, query: trimmed, status: "stopword" });
+    timing.total = performance.now() - t0;
+    logInject({ sessionId, query: trimmed, status: "stopword", timing });
     return "";
   }
 
@@ -50,6 +55,7 @@ export async function searchAndFormat(
   let otherFts: SearchResult[] = [];
   const otherSessionIds = listSessionIds().filter((id) => id !== sessionId);
 
+  const tFts = performance.now();
   if (ftsQuery) {
     try {
       currentFts = searchFTS(sessionId, ftsQuery, compactTs, 10);
@@ -60,13 +66,17 @@ export async function searchAndFormat(
       } catch {}
     }
   }
+  timing.fts = performance.now() - tFts;
 
   // Conditional RRF: if FTS signal is weak (<3 total hits), also run vector and merge
   let currentResults: SearchResult[];
   let otherResults: SearchResult[];
   const ftsTotal = currentFts.length + otherFts.length;
+  let vecRan = false;
 
   if (ftsTotal < 3 && isEmbeddingReady()) {
+    vecRan = true;
+    const tVec = performance.now();
     const currentVec = await vectorSearch(sessionId, trimmed, compactTs, 10);
     const otherVec: SearchResult[] = [];
     for (const sid of otherSessionIds) {
@@ -74,6 +84,7 @@ export async function searchAndFormat(
         otherVec.push(...(await vectorSearch(sid, trimmed, FAR_FUTURE, 5)));
       } catch {}
     }
+    timing.vec = performance.now() - tVec;
     currentResults = rrfMerge(currentFts, currentVec);
     otherResults = rrfMerge(otherFts, otherVec);
   } else {
@@ -82,10 +93,12 @@ export async function searchAndFormat(
   }
 
   if (currentResults.length === 0 && otherResults.length === 0) {
-    logInject({ sessionId, query: trimmed, status: "no_results" });
+    timing.total = performance.now() - t0;
+    logInject({ sessionId, query: trimmed, status: "no_results", timing, vecRan });
     return "";
   }
 
+  const tTemp = performance.now();
   currentResults = applyTimeDecay(currentResults, compactTs);
   otherResults = applyTimeDecay(otherResults, compactTs);
 
@@ -94,14 +107,20 @@ export async function searchAndFormat(
     currentResults = applyTemporalBoost(currentResults, timeRanges);
     otherResults = applyTemporalBoost(otherResults, timeRanges);
   }
+  timing.temporal = performance.now() - tTemp;
 
   const chronological = timeRanges.length > 0 || hasUpdateIndicator(trimmed);
+
+  const tFmt = performance.now();
   const { output, truncated, rendered, total } = formatContext(
     currentResults,
     otherResults,
     config.maxContextChars,
     chronological
   );
+  timing.format = performance.now() - tFmt;
+  timing.total = performance.now() - t0;
+
   logInject({
     sessionId,
     query: trimmed,
@@ -113,8 +132,18 @@ export async function searchAndFormat(
     truncated,
     rendered,
     total,
+    timing,
+    vecRan,
   });
   return output;
+}
+
+interface Timing {
+  fts: number;
+  vec: number;
+  temporal: number;
+  format: number;
+  total: number;
 }
 
 // --- Debug-mode inject log ---
@@ -132,6 +161,8 @@ interface LogEntry {
   truncated?: boolean;
   rendered?: number;
   total?: number;
+  timing?: Timing;
+  vecRan?: boolean;
 }
 
 function logInject(entry: LogEntry): void {
@@ -149,6 +180,16 @@ function logInject(entry: LogEntry): void {
         previews.push(text.slice(0, 80).replace(/\s+/g, " "));
       }
     }
+    const t = entry.timing;
+    const tms = t
+      ? {
+          fts: Math.round(t.fts),
+          vec: Math.round(t.vec),
+          temporal: Math.round(t.temporal),
+          format: Math.round(t.format),
+          total: Math.round(t.total),
+        }
+      : undefined;
     const line = JSON.stringify({
       t: new Date().toISOString(),
       sid: entry.sessionId.slice(0, 8),
@@ -161,6 +202,8 @@ function logInject(entry: LogEntry): void {
       truncated: entry.truncated ?? false,
       rendered: entry.rendered ?? 0,
       total: entry.total ?? 0,
+      vec_ran: entry.vecRan ?? false,
+      ts_ms: tms,
       scores,
       preview: previews,
     });
