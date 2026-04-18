@@ -26,3 +26,6 @@ Thumbs.db
 
 # Internal spec (not for public repo)
 problem_definition.md
+
+# Private related-work PDFs (licensing / drafts)
+related_work/
