@@ -29,6 +29,24 @@ function stripInterrogatives(q: string): string {
   return q.replace(INTERROGATIVE_RE, " ").replace(/\s+/g, " ").trim();
 }
 
+// Early-exit gate: skip retrieval for queries that are pure short commands.
+// URLs / filenames / version strings / git SHAs are user-provided anchors
+// pointing at prior context and belong to the strongest retrieval signal —
+// they pass naturally via content-char count, except bare semver which needs
+// an explicit allow-list (otherwise "v1.9.1" → only 1 letter → falsely gated).
+const VERSION_RE = /^v?\d+(\.\d+){1,3}([-.][\w.]+)?$/i;
+
+function shouldSkipRetrieval(query: string): boolean {
+  const q = query.trim();
+  if (!q) return true;
+  if (VERSION_RE.test(q)) return false;
+  // Content-char threshold: Chinese chars + ASCII letters. Digits / punctuation
+  // / symbols excluded. <3 means "a" / "要" / "先記" / "2a" → skip.
+  const content = q.replace(/[^\u4e00-\u9fffa-zA-Z]/g, "");
+  if (content.length < 3) return true;
+  return false;
+}
+
 export async function searchAndFormat(
   sessionId: string,
   query: string,
@@ -48,6 +66,12 @@ export async function searchAndFormat(
   if (isStopWord(trimmed, config.stopWords)) {
     timing.total = performance.now() - t0;
     logInject({ sessionId, query: trimmed, status: "stopword", timing });
+    return "";
+  }
+
+  if (shouldSkipRetrieval(trimmed)) {
+    timing.total = performance.now() - t0;
+    logInject({ sessionId, query: trimmed, status: "gated", timing });
     return "";
   }
 
@@ -94,9 +118,25 @@ export async function searchAndFormat(
     otherResults = toRrfScored(otherFts);
   }
 
+  const ftsCur = currentFts.length;
+  const ftsOth = otherFts.length;
+  const strippedRan = vecRan && (() => {
+    const s = stripInterrogatives(trimmed);
+    return s.length >= 2 && s !== trimmed;
+  })();
+
   if (currentResults.length === 0 && otherResults.length === 0) {
     timing.total = performance.now() - t0;
-    logInject({ sessionId, query: trimmed, status: "no_results", timing, vecRan });
+    logInject({
+      sessionId,
+      query: trimmed,
+      status: "no_results",
+      timing,
+      vecRan,
+      ftsCur,
+      ftsOth,
+      strippedRan,
+    });
     return "";
   }
 
@@ -137,6 +177,9 @@ export async function searchAndFormat(
     total,
     timing,
     vecRan,
+    ftsCur,
+    ftsOth,
+    strippedRan,
   });
   return output;
 }

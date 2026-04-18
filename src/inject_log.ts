@@ -13,7 +13,7 @@ export interface Timing {
 export interface LogEntry {
   sessionId: string;
   query: string;
-  status: "ok" | "no_compact" | "stopword" | "no_results";
+  status: "ok" | "no_compact" | "stopword" | "no_results" | "gated";
   chronological?: boolean;
   currentResults?: SearchResult[];
   otherResults?: SearchResult[];
@@ -23,6 +23,12 @@ export interface LogEntry {
   total?: number;
   timing?: Timing;
   vecRan?: boolean;
+  // Pre-RRF raw FTS hit counts — lets us measure vec_ran trigger rate
+  // independently from post-merge result counts (n_cur/n_oth).
+  ftsCur?: number;
+  ftsOth?: number;
+  // True when interrogative strip triggered a second embed pass — expected p95 bloat source.
+  strippedRan?: boolean;
 }
 
 const DEBUG_LOG_PATH = `${process.env.HOME}/.claude/contextalign/inject.log`;
@@ -65,6 +71,9 @@ export function logInject(entry: LogEntry): void {
       rendered: entry.rendered ?? 0,
       total: entry.total ?? 0,
       vec_ran: entry.vecRan ?? false,
+      fts_cur: entry.ftsCur ?? 0,
+      fts_oth: entry.ftsOth ?? 0,
+      stripped_ran: entry.strippedRan ?? false,
       ts_ms: tms,
       scores,
       preview: previews,
