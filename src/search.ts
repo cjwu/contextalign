@@ -116,7 +116,8 @@ export async function searchAndFormat(
     currentResults,
     otherResults,
     config.maxContextChars,
-    chronological
+    chronological,
+    sessionId
   );
   timing.format = performance.now() - tFmt;
   timing.total = performance.now() - t0;
@@ -422,6 +423,7 @@ async function vectorSearch(
       corrected_at: item.corrected_at ?? null,
       correction_reason: item.correction_reason ?? null,
       user_cite_score: item.user_cite_score ?? 0,
+      llm_use_score: item.llm_use_score ?? 0,
     });
     if (results.length >= limit) break;
   }
@@ -471,7 +473,9 @@ function rrfMerge(a: SearchResult[], b: SearchResult[]): SearchResult[] {
   return Array.from(merged.values()).sort((x, y) => y.score - x.score);
 }
 
-const USER_CITE_ALPHA = 0.4;
+// Ablation knobs — override via env to 0 to disable each signal independently.
+const USER_CITE_ALPHA = Number(process.env.CAN_USER_CITE_ALPHA ?? 0.4);
+const LLM_USE_ALPHA = Number(process.env.CAN_LLM_USE_ALPHA ?? 0.3);
 
 function applyTimeDecay(results: SearchResult[], compactTs: string): SearchResult[] {
   const compactTime = new Date(compactTs).getTime();
@@ -483,7 +487,8 @@ function applyTimeDecay(results: SearchResult[], compactTs: string): SearchResul
       const decay = Math.pow(0.5, hoursAgo / 24);
       const priorityBoost = r.priority ? 2.0 : 1.0;
       const userCiteBoost = 1 + USER_CITE_ALPHA * (r.user_cite_score ?? 0);
-      return { ...r, score: r.score * decay * priorityBoost * userCiteBoost };
+      const llmUseBoost = 1 + LLM_USE_ALPHA * (r.llm_use_score ?? 0);
+      return { ...r, score: r.score * decay * priorityBoost * userCiteBoost * llmUseBoost };
     })
     .sort((a, b) => {
       if (b.priority !== a.priority) return b.priority - a.priority;
@@ -517,11 +522,38 @@ function contentHash(text: string): string {
   return createHash("sha256").update(normalized).digest("hex");
 }
 
+// Track last injection per session for 2a citation scoring.
+// Populated by formatContext, consumed by stop handler.
+const lastInjection = new Map<
+  string,
+  Array<{ jsonl_offset: number; chunk_text: string; session_id: string }>
+>();
+
+export function getLastInjection(
+  sessionId: string
+): Array<{ jsonl_offset: number; chunk_text: string; session_id: string }> {
+  return lastInjection.get(sessionId) ?? [];
+}
+
+// Lightweight verbatim citation detection: sliding 20-char window with step 5.
+// Catches quoted fragments; paraphrases slip (accepted trade-off).
+export function wasChunkCited(chunkText: string, responseText: string): boolean {
+  if (!chunkText || !responseText || chunkText.length < 20) return false;
+  const win = 20;
+  const step = 5;
+  for (let i = 0; i + win <= chunkText.length; i += step) {
+    const sub = chunkText.substring(i, i + win);
+    if (responseText.includes(sub)) return true;
+  }
+  return false;
+}
+
 function formatContext(
   currentResults: SearchResult[],
   otherResults: SearchResult[],
   maxChars: number,
-  chronological: boolean = false
+  chronological: boolean = false,
+  sessionId?: string
 ): { output: string; truncated: boolean; rendered: number; total: number } {
   // Dedup pass: sort by timestamp ASC and take first-wins.
   // Rationale: the earliest occurrence is guaranteed to be compacted away; the latest
@@ -547,6 +579,7 @@ function formatContext(
   let remaining = maxChars - output.length;
   let rendered = 0;
   let truncated = false;
+  const emitted: Array<{ jsonl_offset: number; chunk_text: string; session_id: string }> = [];
   for (const r of renderOrder) {
     const line = formatResultLine(r);
     if (line.length > remaining) {
@@ -559,7 +592,14 @@ function formatContext(
     output += line;
     remaining -= line.length;
     rendered++;
+    emitted.push({
+      jsonl_offset: r.jsonl_offset,
+      chunk_text: r.chunk_text,
+      session_id: r.session_id,
+    });
   }
+
+  if (sessionId) lastInjection.set(sessionId, emitted);
 
   return { output: output.trim(), truncated, rendered, total: renderOrder.length };
 }

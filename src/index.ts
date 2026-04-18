@@ -8,8 +8,9 @@ import { dirname } from "path";
 import { initDb, setCompactTimestamp, listSessions, deleteSession, getCompactTimestamp, getEmbeddingProgress } from "./db.js";
 import { initEmbedding, embed, isEmbeddingReady } from "./embedding.js";
 import { indexNewMessages } from "./indexer.js";
-import { searchAndFormat } from "./search.js";
-import { insertPriorityChunk, ensureSessionTables, markLastAssistantCorrected, incrementLastAssistantUserCite } from "./db.js";
+import { searchAndFormat, getLastInjection, wasChunkCited } from "./search.js";
+import { insertPriorityChunk, ensureSessionTables, markLastAssistantCorrected, incrementLastAssistantUserCite, updateLlmUseScore } from "./db.js";
+import { readFileSync } from "fs";
 import { DEFAULT_CONFIG } from "./types.js";
 import type { Config } from "./types.js";
 
@@ -133,11 +134,60 @@ async function handleHookRequest(data: any): Promise<any> {
           console.error("[ContextAlign] Async indexing error:", err)
         );
       }
+
+      // 2a: on stop, score last-injection chunks by citation in latest assistant response
+      if (type === "stop" && sessionId && transcriptPath) {
+        try {
+          scoreLastInjection(sessionId, transcriptPath);
+        } catch (err) {
+          console.error("[ContextAlign] scoreLastInjection error:", err);
+        }
+      }
+
       return { ok: true };
     }
 
     default:
       return { ok: true };
+  }
+}
+
+function readLatestAssistantText(transcriptPath: string): string | null {
+  try {
+    const content = readFileSync(transcriptPath, "utf-8");
+    const lines = content.split("\n");
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const line = lines[i].trim();
+      if (!line) continue;
+      try {
+        const entry = JSON.parse(line);
+        if (entry.type !== "assistant" || entry.message?.role !== "assistant") continue;
+        const blocks = Array.isArray(entry.message.content)
+          ? entry.message.content
+          : [{ type: "text", text: String(entry.message.content ?? "") }];
+        const texts: string[] = [];
+        for (const b of blocks) {
+          if (b.type === "text" && b.text) texts.push(b.text);
+        }
+        if (texts.length > 0) return texts.join("\n");
+      } catch {
+        continue;
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function scoreLastInjection(sessionId: string, transcriptPath: string): void {
+  const injection = getLastInjection(sessionId);
+  if (!injection.length) return;
+  const response = readLatestAssistantText(transcriptPath);
+  if (!response) return;
+  for (const item of injection) {
+    const cited = wasChunkCited(item.chunk_text, response);
+    updateLlmUseScore(item.session_id, item.jsonl_offset, cited);
   }
 }
 

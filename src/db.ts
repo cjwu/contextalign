@@ -62,6 +62,8 @@ export function ensureSessionTables(sessionId: string, transcriptPath: string): 
   try { db.exec(`ALTER TABLE ${ct} ADD COLUMN correction_reason TEXT`); } catch {}
   // User-citation behavioral signal (v1.9.3+). Positive-only, capped at 3.0.
   try { db.exec(`ALTER TABLE ${ct} ADD COLUMN user_cite_score REAL DEFAULT 0`); } catch {}
+  // LLM downstream usage signal (v1.9.4+, RMM-style). EMA clipped to [-1, 1].
+  try { db.exec(`ALTER TABLE ${ct} ADD COLUMN llm_use_score REAL DEFAULT 0`); } catch {}
 
   db.exec(`
     CREATE VIRTUAL TABLE IF NOT EXISTS ${ft} USING fts5(
@@ -126,7 +128,7 @@ export function searchFTS(
   const rows = db.prepare(`
     SELECT c.id, c.jsonl_offset, c.role, c.message_text, c.chunk_text,
            c.priority, c.timestamp, c.corrected_at, c.correction_reason,
-           c.user_cite_score,
+           c.user_cite_score, c.llm_use_score,
            ${ft}.rank AS score
     FROM ${ft}
     JOIN ${ct} c ON c.id = ${ft}.rowid
@@ -153,6 +155,7 @@ export function searchFTS(
         corrected_at: row.corrected_at ?? null,
         correction_reason: row.correction_reason ?? null,
         user_cite_score: row.user_cite_score ?? 0,
+        llm_use_score: row.llm_use_score ?? 0,
       });
     }
   }
@@ -170,11 +173,11 @@ export function getAllEmbeddings(
   sessionId: string,
   beforeTimestamp: string,
   minChars: number = 0
-): Array<{ id: number; jsonl_offset: number; role: string; message_text: string; chunk_text: string; embedding: Buffer; priority: number; timestamp: string; corrected_at: string | null; correction_reason: string | null; user_cite_score: number }> {
+): Array<{ id: number; jsonl_offset: number; role: string; message_text: string; chunk_text: string; embedding: Buffer; priority: number; timestamp: string; corrected_at: string | null; correction_reason: string | null; user_cite_score: number; llm_use_score: number }> {
   const ct = chunksTable(sessionId);
   return db.prepare(`
     SELECT id, jsonl_offset, role, message_text, chunk_text, embedding, priority, timestamp,
-           corrected_at, correction_reason, user_cite_score
+           corrected_at, correction_reason, user_cite_score, llm_use_score
     FROM ${ct}
     WHERE embedding IS NOT NULL
       AND timestamp < ?
@@ -201,6 +204,24 @@ export function markLastAssistantCorrected(sessionId: string, reason: string): n
   } catch {
     return 0;
   }
+}
+
+// EMA-update llm_use_score for a specific chunk based on downstream citation.
+// Positive when Claude cited, negative otherwise; clipped to [-1, 1].
+export function updateLlmUseScore(sessionId: string, jsonlOffset: number, cited: boolean): void {
+  const ct = chunksTable(sessionId);
+  try {
+    const row = db.prepare(`
+      SELECT llm_use_score FROM ${ct} WHERE jsonl_offset = ? LIMIT 1
+    `).get(jsonlOffset) as any;
+    if (!row) return;
+    const old = Number(row.llm_use_score ?? 0);
+    const delta = cited ? 1 : -1;
+    const next = Math.max(-1, Math.min(1, 0.7 * old + 0.3 * delta));
+    db.prepare(`
+      UPDATE ${ct} SET llm_use_score = ? WHERE jsonl_offset = ?
+    `).run(next, jsonlOffset);
+  } catch {}
 }
 
 // Increment user_cite_score on the most recent assistant chunk (capped).

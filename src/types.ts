@@ -81,6 +81,7 @@ export interface SearchResult {
   corrected_at?: string | null;
   correction_reason?: string | null;
   user_cite_score?: number;
+  llm_use_score?: number;
 }
 
 // Hook request types
