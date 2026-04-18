@@ -82,7 +82,13 @@ export async function indexNewMessages(
   }
 }
 
-async function backfillEmbeddings(sessionId: string): Promise<void> {
+// Hardening: break infinite self-rescheduling when embedBatch returns all-null
+// (model-load failure, OOM, poison chunk). Without this, getChunksWithoutEmbedding
+// keeps returning the same rows, each batch commits 0 embeddings, and the
+// setTimeout chain runs forever.
+const MAX_CONSECUTIVE_FAILS = 3;
+
+async function backfillEmbeddings(sessionId: string, failCount = 0): Promise<void> {
   if (backfillInProgress.has(sessionId)) return;
   backfillInProgress.add(sessionId);
 
@@ -94,16 +100,28 @@ async function backfillEmbeddings(sessionId: string): Promise<void> {
 
     // Single ONNX forward pass for the whole batch
     const embeddings = await embedBatch(rows.map((r) => r.chunk_text));
+    let progress = 0;
     for (let i = 0; i < rows.length; i++) {
       const emb = embeddings[i];
-      if (emb) updateChunkEmbedding(sessionId, rows[i].id, emb);
+      if (emb) {
+        updateChunkEmbedding(sessionId, rows[i].id, emb);
+        progress++;
+      }
+    }
+
+    const nextFail = progress === 0 ? failCount + 1 : 0;
+    if (nextFail >= MAX_CONSECUTIVE_FAILS) {
+      console.error(
+        `[ContextAlign] Embedding backfill aborted for session ${sessionId}: ${MAX_CONSECUTIVE_FAILS} consecutive zero-progress batches`
+      );
+      return;
     }
 
     // If more remain, schedule next batch with throttle pause
     const remaining = getChunksWithoutEmbedding(sessionId, 1);
     if (remaining.length > 0) {
       setTimeout(() => {
-        backfillEmbeddings(sessionId).catch(() => {});
+        backfillEmbeddings(sessionId, nextFail).catch(() => {});
       }, embeddingBatchDelayMs);
     }
   } finally {

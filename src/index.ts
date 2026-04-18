@@ -9,6 +9,13 @@ import { initDb, setCompactTimestamp, listSessions, deleteSession, getCompactTim
 import { initEmbedding, embed, isEmbeddingReady } from "./embedding.js";
 import { indexNewMessages } from "./indexer.js";
 import { searchAndFormat, getLastInjection, wasChunkCited } from "./search.js";
+import { getLastInjectionTime } from "./format.js";
+import { logOutcome, logChallenge } from "./outcome_log.js";
+import {
+  detectHallucinationRisk,
+  writeHallucinationFlag,
+  clearHallucinationFlag,
+} from "./hallucination.js";
 import { insertPriorityChunk, ensureSessionTables, markLastAssistantCorrected, incrementLastAssistantUserCite, updateLlmUseScore, setLastAssistantDwell } from "./db.js";
 import { readFileSync } from "fs";
 import { DEFAULT_CONFIG } from "./types.js";
@@ -68,6 +75,9 @@ async function handleHookRequest(data: any): Promise<any> {
         ensureSessionTables(sessionId, transcriptPath);
       }
 
+      // Clear stale hallucination flag — user has had a chance to see it.
+      clearHallucinationFlag();
+
       // Yi 2014 dwell-time: gap between latest assistant turn and this prompt.
       // Normalizes by response length downstream. Capped inside DB at 5 min to
       // discount AFK gaps. Fires before correction/citation so those updates
@@ -87,11 +97,34 @@ async function handleHookRequest(data: any): Promise<any> {
       // Correction detection: if user prompt signals rejection of previous AI
       // response, annotate the last assistant chunk so future retrievals carry
       // the "被糾正" marker. Annotate only — do not suppress.
-      if (prompt && sessionId && /不對|錯了|不是這樣|改成|這不是我要的|重來|錯誤|這不對|wrong|incorrect/i.test(prompt)) {
+      const isCorrection =
+        !!prompt && /不對|錯了|不是這樣|改成|這不是我要的|重來|錯誤|這不對|wrong|incorrect/i.test(prompt);
+      if (isCorrection && sessionId) {
         try {
           markLastAssistantCorrected(sessionId, prompt);
         } catch (err) {
           console.error("[ContextAlign] markLastAssistantCorrected error:", err);
+        }
+      }
+
+      // Challenge detection (v1.9.9): user questions the previous answer without
+      // an explicit correction verb ("你確定嗎 / 真的嗎 / 確認一下"). Paired with
+      // outcome.log to later measure rescue rate — did the next retrieval surface
+      // enough evidence for Claude to revise?
+      const isConfidenceQuery =
+        !isCorrection &&
+        !!prompt &&
+        /你確定|確定嗎|真的嗎|對嗎|是嗎|這對嗎|確認一下|再想|再查|are you sure|really\?|double.check/i.test(prompt);
+      if (sessionId && (isCorrection || isConfidenceQuery)) {
+        try {
+          logChallenge({
+            sessionId,
+            prevInjTime: getLastInjectionTime(sessionId),
+            prompt: prompt ?? "",
+            kind: isCorrection ? "correction" : "confidence",
+          });
+        } catch (err) {
+          console.error("[ContextAlign] logChallenge error:", err);
         }
       }
 
@@ -221,9 +254,26 @@ function scoreLastInjection(sessionId: string, transcriptPath: string): void {
   if (!injection.length) return;
   const response = readLatestAssistantText(transcriptPath);
   if (!response) return;
+  let citedCount = 0;
   for (const item of injection) {
     const cited = wasChunkCited(item.chunk_text, response);
+    if (cited) citedCount++;
     updateLlmUseScore(item.session_id, item.jsonl_offset, cited);
+  }
+  logOutcome({
+    sessionId,
+    injTime: getLastInjectionTime(sessionId),
+    topN: injection.length,
+    cited: citedCount,
+  });
+
+  // Hallucination risk nudge (v1.9.9): response anchors absent from memory-context
+  // → statusline shows "hallucination risk N/M unverified". Advisory, not authoritative.
+  const risk = detectHallucinationRisk(response, injection);
+  if (risk.risk) {
+    writeHallucinationFlag(risk.unmatched, risk.total);
+  } else {
+    clearHallucinationFlag();
   }
 }
 

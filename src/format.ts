@@ -39,11 +39,18 @@ const lastInjection = new Map<
   string,
   Array<{ jsonl_offset: number; chunk_text: string; session_id: string }>
 >();
+// Parallel timestamp map. Used by outcome.log to correlate challenges with
+// the prior injection event.
+const lastInjectionTime = new Map<string, string>();
 
 export function getLastInjection(
   sessionId: string
 ): Array<{ jsonl_offset: number; chunk_text: string; session_id: string }> {
   return lastInjection.get(sessionId) ?? [];
+}
+
+export function getLastInjectionTime(sessionId: string): string | undefined {
+  return lastInjectionTime.get(sessionId);
 }
 
 export function formatContext(
@@ -98,7 +105,10 @@ export function formatContext(
     });
   }
 
-  if (sessionId) lastInjection.set(sessionId, emitted);
+  if (sessionId) {
+    lastInjection.set(sessionId, emitted);
+    lastInjectionTime.set(sessionId, new Date().toISOString());
+  }
 
   const finalOutput = output.replace(/\n+$/, "") + "\n" + FENCE_CLOSE;
   return { output: finalOutput, truncated, rendered, total: renderOrder.length };
