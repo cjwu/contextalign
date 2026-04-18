@@ -29,6 +29,11 @@ export interface LogEntry {
   ftsOth?: number;
   // True when interrogative strip triggered a second embed pass — expected p95 bloat source.
   strippedRan?: boolean;
+  // Observation-only (v1.9.8+): true when the query looks like it references
+  // a specific anchor — identifier/path/version/quoted/reference word. Used
+  // to audit whether CAN's current retrieval handles anchor-style queries
+  // well enough before adding any anchor-expansion mechanism.
+  queryAnchor?: boolean;
 }
 
 const DEBUG_LOG_PATH = `${process.env.HOME}/.claude/contextalign/inject.log`;
@@ -74,6 +79,7 @@ export function logInject(entry: LogEntry): void {
       fts_cur: entry.ftsCur ?? 0,
       fts_oth: entry.ftsOth ?? 0,
       stripped_ran: entry.strippedRan ?? false,
+      q_anchor: entry.queryAnchor ?? false,
       ts_ms: tms,
       scores,
       preview: previews,

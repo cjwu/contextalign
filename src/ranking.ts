@@ -16,6 +16,12 @@ const CORRECTION_PENALTY = Number(process.env.CAN_CORRECTION_PENALTY ?? 0.5);
 // where 10 chars/sec is a careful-read baseline. norm ≈ 1 = expected pace;
 // >1 = deliberate engagement; <0.3 = skim.
 const DWELL_ALPHA = Number(process.env.CAN_DWELL_ALPHA ?? 0.3);
+// Hyperbolic decay half-life (hours). Replaces exponential 0.5^(t/T) with
+// 1/(1 + t/T). Same half-life at t=T, but much slower tail — models human
+// Ebbinghaus power-law forgetting better than exponential (Ainslie 1975
+// hyperbolic discounting; Wixted & Ebbesen 1991 on retention curves).
+// Also aligns with CAN's mission: older chunks are the retrieval target.
+const DECAY_HALFLIFE_HOURS = Number(process.env.CAN_DECAY_HALFLIFE_HOURS ?? 24);
 
 function userCiteSaturate(x: number): number {
   if (x <= 0) return 0;
@@ -77,8 +83,8 @@ export function applyTimeDecay(results: SearchResult[], compactTs: string): Sear
   return results
     .map((r) => {
       const msgTime = new Date(r.timestamp).getTime();
-      const hoursAgo = (compactTime - msgTime) / (1000 * 60 * 60);
-      const decay = Math.pow(0.5, hoursAgo / 24);
+      const hoursAgo = Math.max(0, (compactTime - msgTime) / (1000 * 60 * 60));
+      const decay = 1 / (1 + hoursAgo / DECAY_HALFLIFE_HOURS);
       const priorityBoost = r.priority ? 2.0 : 1.0;
       const userCiteBoost = 1 + USER_CITE_ALPHA * userCiteSaturate(r.user_cite_score ?? 0);
       const llmUseBoost = 1 + LLM_USE_ALPHA * (r.llm_use_score ?? 0);

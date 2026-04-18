@@ -36,6 +36,27 @@ function stripInterrogatives(q: string): string {
 // an explicit allow-list (otherwise "v1.9.1" → only 1 letter → falsely gated).
 const VERSION_RE = /^v?\d+(\.\d+){1,3}([-.][\w.]+)?$/i;
 
+// Observation-only (v1.9.8): does the query look anchor-referential?
+// Identifier-like token, path, version, git SHA, CamelCase, quoted string,
+// or explicit reference word. Used to segment inject.log — NO effect on ranking.
+// Split into multiple REs so /i applies only where needed (CamelCase must be
+// case-sensitive or the [A-Z] portion becomes meaningless under /i).
+const ANCHOR_PATTERNS: RegExp[] = [
+  /[a-zA-Z][\w-]*\/[\w./-]+/,
+  /[\w-]+\.(pdf|md|ts|tsx|js|jsx|py|sh|json|jsonl|log|yml|yaml|sql|html?|css|toml)/i,
+  /\bv?\d+\.\d+(\.\d+)*\b/,
+  /\b[0-9a-f]{7,40}\b/,
+  /\b[a-z]+[A-Z][\w]*\b/,
+  /"[^"]{3,}"/,
+  /「[^」]{2,}」/,
+  /剛才|剛剛|之前|上面|上次|先前|那個|那篇|那段/,
+  /\b(earlier|above|before|that one|that thing)\b/i,
+];
+
+function queryHasAnchor(query: string): boolean {
+  return ANCHOR_PATTERNS.some((re) => re.test(query));
+}
+
 function shouldSkipRetrieval(query: string): boolean {
   const q = query.trim();
   if (!q) return true;
@@ -56,22 +77,23 @@ export async function searchAndFormat(
   const timing: Timing = { fts: 0, vec: 0, temporal: 0, format: 0, total: 0 };
 
   const compactTs = getCompactTimestamp(sessionId);
+  const queryAnchor = queryHasAnchor(query);
   if (!compactTs) {
     timing.total = performance.now() - t0;
-    logInject({ sessionId, query, status: "no_compact", timing });
+    logInject({ sessionId, query, status: "no_compact", timing, queryAnchor });
     return "";
   }
 
   const trimmed = query.trim();
   if (isStopWord(trimmed, config.stopWords)) {
     timing.total = performance.now() - t0;
-    logInject({ sessionId, query: trimmed, status: "stopword", timing });
+    logInject({ sessionId, query: trimmed, status: "stopword", timing, queryAnchor });
     return "";
   }
 
   if (shouldSkipRetrieval(trimmed)) {
     timing.total = performance.now() - t0;
-    logInject({ sessionId, query: trimmed, status: "gated", timing });
+    logInject({ sessionId, query: trimmed, status: "gated", timing, queryAnchor });
     return "";
   }
 
@@ -136,6 +158,7 @@ export async function searchAndFormat(
       ftsCur,
       ftsOth,
       strippedRan,
+      queryAnchor,
     });
     return "";
   }
@@ -180,6 +203,7 @@ export async function searchAndFormat(
     ftsCur,
     ftsOth,
     strippedRan,
+    queryAnchor,
   });
   return output;
 }

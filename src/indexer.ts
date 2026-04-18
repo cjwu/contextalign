@@ -32,8 +32,11 @@ export async function indexNewMessages(
     if (fileStat.size <= lastOffset) return; // Nothing new
 
     const chunks: Chunk[] = [];
-    let currentOffset = 0;
-    let lineNumber = 0;
+    // Track byte position of the START of each line for a unique jsonl_offset
+    // per JSONL entry. The previous non-accumulating write caused different
+    // lines with similar length to collide on offset, breaking RRF dedup keys
+    // and misrouting user_cite / llm_use updates.
+    let currentOffset = lastOffset;
 
     const stream = createReadStream(transcriptPath, {
       encoding: "utf-8",
@@ -42,14 +45,14 @@ export async function indexNewMessages(
     const rl = createInterface({ input: stream, crlfDelay: Infinity });
 
     for await (const line of rl) {
-      lineNumber++;
-      currentOffset = lastOffset + Buffer.byteLength(line, "utf-8") + 1; // +1 for newline
+      const lineStart = currentOffset;
+      currentOffset += Buffer.byteLength(line, "utf-8") + 1; // +1 for newline
 
       if (!line.trim()) continue;
 
       try {
         const entry = JSON.parse(line);
-        const parsed = parseEntry(entry, currentOffset);
+        const parsed = parseEntry(entry, lineStart);
         if (parsed.length > 0) {
           chunks.push(...parsed);
         }
