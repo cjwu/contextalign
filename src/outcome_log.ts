@@ -18,6 +18,11 @@ export interface OutcomeEntry {
   injTime?: string;
   topN: number;
   cited: number;
+  // Observation-only (v1.9.10): per-turn hallucination-risk detector counts.
+  // Anchors extracted from Claude response; unmatched = not in memory-context.
+  // Kept in outcome.log to let ablation jq correlate save rate vs hallucination.
+  hallucAnchors?: number;
+  hallucUnmatched?: number;
 }
 
 export function logOutcome(entry: OutcomeEntry): void {
@@ -34,6 +39,8 @@ export function logOutcome(entry: OutcomeEntry): void {
     top_n: entry.topN,
     cited: entry.cited,
     outcome,
+    halluc_anchors: entry.hallucAnchors ?? 0,
+    halluc_unmatched: entry.hallucUnmatched ?? 0,
   });
 }
 

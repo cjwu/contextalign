@@ -1,13 +1,8 @@
-import { mkdirSync, writeFileSync, unlinkSync } from "fs";
-import { dirname } from "path";
-
-// Flag file consumed by ~/.claude/statusline-command.sh to show
-// "hallucination risk N/M" nudge. Purely advisory — user decides whether
-// to challenge. FP is accepted (general-knowledge tokens, training-data
-// facts) because a nudge's cost is a user-initiated verification, not a
-// system claim.
-const FLAG_PATH = `${process.env.HOME}/.claude/contextalign/.hallucination_risk`;
-
+// Hallucination-risk detection kept as observation-only (v1.9.10): log the
+// per-turn unmatched/total anchor stats into outcome.log for ablation/paper
+// analysis. The statusline flag display was withdrawn because per-turn
+// nudges became noisy and lost signal value — user preferred clean UI over
+// real-time warnings. Measurement plumbing preserved for research.
 const MIN_ANCHORS = Number(process.env.CAN_HALLUC_MIN_ANCHORS ?? 3);
 // Single-track trigger (v1.9.9 final): severity >= 40% fires, else silent.
 // Statusline colors yellow in [40, 70), red at >= 70.
@@ -71,15 +66,3 @@ export function detectHallucinationRisk(
   return { risk: severity >= MIN_SEVERITY, unmatched, total };
 }
 
-export function writeHallucinationFlag(unmatched: number, total: number): void {
-  try {
-    mkdirSync(dirname(FLAG_PATH), { recursive: true });
-    writeFileSync(FLAG_PATH, `${unmatched}/${total}`);
-  } catch {}
-}
-
-export function clearHallucinationFlag(): void {
-  try {
-    unlinkSync(FLAG_PATH);
-  } catch {}
-}

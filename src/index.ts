@@ -11,11 +11,7 @@ import { indexNewMessages } from "./indexer.js";
 import { searchAndFormat, getLastInjection, wasChunkCited } from "./search.js";
 import { getLastInjectionTime } from "./format.js";
 import { logOutcome, logChallenge } from "./outcome_log.js";
-import {
-  detectHallucinationRisk,
-  writeHallucinationFlag,
-  clearHallucinationFlag,
-} from "./hallucination.js";
+import { detectHallucinationRisk } from "./hallucination.js";
 import { insertPriorityChunk, ensureSessionTables, markLastAssistantCorrected, incrementLastAssistantUserCite, updateLlmUseScore, setLastAssistantDwell } from "./db.js";
 import { readFileSync } from "fs";
 import { DEFAULT_CONFIG } from "./types.js";
@@ -74,9 +70,6 @@ async function handleHookRequest(data: any): Promise<any> {
       if (transcriptPath) {
         ensureSessionTables(sessionId, transcriptPath);
       }
-
-      // Clear stale hallucination flag — user has had a chance to see it.
-      clearHallucinationFlag();
 
       // Yi 2014 dwell-time: gap between latest assistant turn and this prompt.
       // Normalizes by response length downstream. Capped inside DB at 5 min to
@@ -260,21 +253,18 @@ function scoreLastInjection(sessionId: string, transcriptPath: string): void {
     if (cited) citedCount++;
     updateLlmUseScore(item.session_id, item.jsonl_offset, cited);
   }
+  // Observation-only (v1.9.10): compute hallucination-risk stats alongside
+  // citation score and emit them in the same outcome.log line. No display,
+  // no ranking impact — purely research data for paper ablation.
+  const risk = detectHallucinationRisk(response, injection);
   logOutcome({
     sessionId,
     injTime: getLastInjectionTime(sessionId),
     topN: injection.length,
     cited: citedCount,
+    hallucAnchors: risk.total,
+    hallucUnmatched: risk.unmatched,
   });
-
-  // Hallucination risk nudge (v1.9.9): response anchors absent from memory-context
-  // → statusline shows "hallucination risk N/M unverified". Advisory, not authoritative.
-  const risk = detectHallucinationRisk(response, injection);
-  if (risk.risk) {
-    writeHallucinationFlag(risk.unmatched, risk.total);
-  } else {
-    clearHallucinationFlag();
-  }
 }
 
 function buildStatus(sessionId: string): string {

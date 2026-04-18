@@ -56,41 +56,7 @@ if [ -n "$used_pct" ]; then
   fi
 fi
 
-# Hallucination risk nudge (v1.9.9). File content is "N/M" (unmatched/total anchors).
-# Severity = N*100/M. Flag fires only when severity>=40%; colour yellow in
-# [40,70) and red at >=70.
-# mtime freshness: if flag is >60s old, treat as stale. This guards against
-# cases where UserPromptSubmit cleared the file but statusline hasn't re-
-# rendered yet; eventual refresh self-heals within a minute.
-halluc_warn=""
-flag_file="$HOME/.claude/contextalign/.hallucination_risk"
-if [ -f "$flag_file" ]; then
-  mtime=$(stat -f %m "$flag_file" 2>/dev/null)
-  now=$(date +%s)
-  age=$((now - mtime))
-  if [ -n "$mtime" ] && [ "$age" -lt 60 ]; then
-    risk=$(cat "$flag_file" 2>/dev/null)
-  else
-    risk=""
-  fi
-  if [ -n "$risk" ]; then
-    halluc_warn=" | hallucination risk ${risk} unverified, pls challenge claude"
-    n=$(echo "$risk" | cut -d/ -f1)
-    m=$(echo "$risk" | cut -d/ -f2)
-    if [ -n "$n" ] && [ -n "$m" ] && [ "$m" -gt 0 ] 2>/dev/null; then
-      sev=$((n * 100 / m))
-      if [ "$sev" -ge 70 ]; then
-        line3_color="\033[0;31m"   # red
-      else
-        line3_color="\033[0;33m"   # yellow (default flag tier)
-      fi
-    else
-      line3_color="\033[0;33m"
-    fi
-  fi
-fi
-
-line3="[${can_state}${ctx_warn}${halluc_warn}]"
+line3="[${can_state}${ctx_warn}]"
 
 # Output multi-line status
 printf "\033[0;34m%s\033[0m" "$cwd"
