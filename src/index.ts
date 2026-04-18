@@ -9,7 +9,7 @@ import { initDb, setCompactTimestamp, listSessions, deleteSession, getCompactTim
 import { initEmbedding, embed, isEmbeddingReady } from "./embedding.js";
 import { indexNewMessages } from "./indexer.js";
 import { searchAndFormat } from "./search.js";
-import { insertPriorityChunk, ensureSessionTables } from "./db.js";
+import { insertPriorityChunk, ensureSessionTables, markLastAssistantCorrected } from "./db.js";
 import { DEFAULT_CONFIG } from "./types.js";
 import type { Config } from "./types.js";
 
@@ -65,6 +65,17 @@ async function handleHookRequest(data: any): Promise<any> {
       // Ensure session exists
       if (transcriptPath) {
         ensureSessionTables(sessionId, transcriptPath);
+      }
+
+      // Correction detection: if user prompt signals rejection of previous AI
+      // response, annotate the last assistant chunk so future retrievals carry
+      // the "被糾正" marker. Annotate only — do not suppress.
+      if (prompt && sessionId && /不對|錯了|不是這樣|改成|這不是我要的|重來|錯誤|這不對|wrong|incorrect/i.test(prompt)) {
+        try {
+          markLastAssistantCorrected(sessionId, prompt);
+        } catch (err) {
+          console.error("[ContextAlign] markLastAssistantCorrected error:", err);
+        }
       }
 
       // Build status line

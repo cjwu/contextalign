@@ -57,6 +57,10 @@ export function ensureSessionTables(sessionId: string, transcriptPath: string): 
     )
   `);
 
+  // Idempotent column adds for correction annotation (v1.9.2+)
+  try { db.exec(`ALTER TABLE ${ct} ADD COLUMN corrected_at TEXT`); } catch {}
+  try { db.exec(`ALTER TABLE ${ct} ADD COLUMN correction_reason TEXT`); } catch {}
+
   db.exec(`
     CREATE VIRTUAL TABLE IF NOT EXISTS ${ft} USING fts5(
       chunk_text,
@@ -119,7 +123,7 @@ export function searchFTS(
 
   const rows = db.prepare(`
     SELECT c.id, c.jsonl_offset, c.role, c.message_text, c.chunk_text,
-           c.priority, c.timestamp,
+           c.priority, c.timestamp, c.corrected_at, c.correction_reason,
            ${ft}.rank AS score
     FROM ${ft}
     JOIN ${ct} c ON c.id = ${ft}.rowid
@@ -143,6 +147,8 @@ export function searchFTS(
         score: row.score,
         timestamp: row.timestamp,
         priority: row.priority,
+        corrected_at: row.corrected_at ?? null,
+        correction_reason: row.correction_reason ?? null,
       });
     }
   }
@@ -160,15 +166,37 @@ export function getAllEmbeddings(
   sessionId: string,
   beforeTimestamp: string,
   minChars: number = 0
-): Array<{ id: number; jsonl_offset: number; role: string; message_text: string; chunk_text: string; embedding: Buffer; priority: number; timestamp: string }> {
+): Array<{ id: number; jsonl_offset: number; role: string; message_text: string; chunk_text: string; embedding: Buffer; priority: number; timestamp: string; corrected_at: string | null; correction_reason: string | null }> {
   const ct = chunksTable(sessionId);
   return db.prepare(`
-    SELECT id, jsonl_offset, role, message_text, chunk_text, embedding, priority, timestamp
+    SELECT id, jsonl_offset, role, message_text, chunk_text, embedding, priority, timestamp,
+           corrected_at, correction_reason
     FROM ${ct}
     WHERE embedding IS NOT NULL
       AND timestamp < ?
       AND length(chunk_text) >= ?
   `).all(beforeTimestamp, minChars) as any[];
+}
+
+// --- Correction annotation ---
+
+export function markLastAssistantCorrected(sessionId: string, reason: string): number {
+  const ct = chunksTable(sessionId);
+  try {
+    const row = db.prepare(`
+      SELECT jsonl_offset FROM ${ct}
+      WHERE role = 'assistant' AND corrected_at IS NULL
+      ORDER BY timestamp DESC LIMIT 1
+    `).get() as any;
+    if (!row) return 0;
+    const res = db.prepare(`
+      UPDATE ${ct} SET corrected_at = ?, correction_reason = ?
+      WHERE jsonl_offset = ?
+    `).run(new Date().toISOString(), reason.slice(0, 200), row.jsonl_offset);
+    return Number(res.changes);
+  } catch {
+    return 0;
+  }
 }
 
 // --- Embedding backfill ---

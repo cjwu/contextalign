@@ -78,6 +78,8 @@ export interface SearchResult {
   score: number;
   timestamp: string;
   priority: number;
+  corrected_at?: string | null;
+  correction_reason?: string | null;
 }
 
 // Hook request types

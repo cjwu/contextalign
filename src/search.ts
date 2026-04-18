@@ -376,6 +376,8 @@ async function vectorSearch(
       score: item.score,
       timestamp: item.timestamp,
       priority: item.priority,
+      corrected_at: item.corrected_at ?? null,
+      correction_reason: item.correction_reason ?? null,
     });
     if (results.length >= limit) break;
   }
@@ -457,7 +459,10 @@ function formatResultLine(r: SearchResult): string {
   const ts = formatTimestamp(r.timestamp);
   const shortId = r.session_id.slice(0, 8);
   const text = r.message_text.length <= 500 ? r.message_text : r.chunk_text;
-  return `[${roleLabel} ${ts} ${shortId}]: ${text}\n`;
+  const correction = r.corrected_at
+    ? ` [已被使用者於 ${formatTimestamp(r.corrected_at)} 糾正]`
+    : "";
+  return `[${roleLabel} ${ts} ${shortId}${correction}]: ${text}\n`;
 }
 
 function contentHash(text: string): string {
